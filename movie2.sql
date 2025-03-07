@@ -1,4 +1,7 @@
-SELECT * FROM biniyam-452918.movies.movie2;
+-- Step 1: Review initial data (optional sanity check)
+SELECT * FROM `biniyam-452918.movies.movie2`;
+
+-- Step 2: Standardize 'age_limit' column for consistency
 UPDATE `biniyam-452918.movies.movie2`
 SET age_limit = CASE
     WHEN age_limit = 'A' THEN '18'
@@ -19,119 +22,88 @@ SET age_limit = CASE
     WHEN age_limit = 'AA' THEN '18'
     ELSE age_limit
 END
-WHERE age_limit IN ('A', 'TV-MA', 'PG', 'X', 'Unknown', 'Approved', '12A', '16', 'PG-13', 'Not rated', 'U', 'Rejected', '12', 'R', '18', 'AA');
+WHERE age_limit IN (
+    'A', 'TV-MA', 'PG', 'X', 'Unknown', 'Approved', 
+    '12A', '16', 'PG-13', 'Not rated', 'U', 'Rejected', 
+    '12', 'R', '18', 'AA'
+);
 
+-- Set NULL age limits to 'Unknown' for consistency
 UPDATE `biniyam-452918.movies.movie2`
 SET age_limit = 'Unknown'
 WHERE age_limit IS NULL;
 
-
-
+-- Step 3: Remove temporary column (if created earlier)
 ALTER TABLE `biniyam-452918.movies.movie2`
-ADD COLUMN Metascore_status STRING;
+DROP COLUMN IF EXISTS Metascore_status;
 
-ALTER TABLE `biniyam-452918.movies.movie2`
-DROP COLUMN Metascore_status;
-
-  
-
-
-WITH DurationParsed AS (
-  SELECT *,
-         CAST(REGEXP_EXTRACT(duration, r'(\d+)h') AS INT64) AS hours,
-         CAST(REGEXP_EXTRACT(duration, r'(\d+)m') AS INT64) AS minutes
-  FROM `biniyam-452918.movies.movie2`
-)
-UPDATE `biniyam-452918.movies.movie2`
-SET duration = (hours * 60 + minutes)
-WHERE hours IS NOT NULL OR minutes IS NOT NULL;
-
-
-
-
-
-
--- Add a new column to store cleaned duration in minutes (optional if you want to keep the original column)
+-- Step 4: Parse and convert 'duration' to minutes (duration cleanup)
 ALTER TABLE `biniyam-452918.movies.movie2`
 ADD COLUMN duration_minutes INT64;
 
--- Now update duration_minutes based on duration string
 UPDATE `biniyam-452918.movies.movie2`
 SET duration_minutes = 
     CASE 
         WHEN REGEXP_CONTAINS(duration, r'(\d+)h (\d+)m') THEN 
-            CAST(REGEXP_EXTRACT(duration, r'(\d+)h') AS INT64) * 60 + CAST(REGEXP_EXTRACT(duration, r'(\d+)m') AS INT64)
+            CAST(REGEXP_EXTRACT(duration, r'(\d+)h') AS INT64) * 60 
+            + CAST(REGEXP_EXTRACT(duration, r'(\d+)m') AS INT64)
         WHEN REGEXP_CONTAINS(duration, r'(\d+)h') THEN 
             CAST(REGEXP_EXTRACT(duration, r'(\d+)h') AS INT64) * 60
         WHEN REGEXP_CONTAINS(duration, r'(\d+)m') THEN 
             CAST(REGEXP_EXTRACT(duration, r'(\d+)m') AS INT64)
-        ELSE NULL  -- Handle any unexpected cases gracefully
+        ELSE NULL
     END
 WHERE duration IS NOT NULL;
 
--- OPTIONAL: If you want to drop the old 'duration' column and rename the new one
--- ALTER TABLE `biniyam-452918.movies.movie2` DROP COLUMN duration;
--- ALTER TABLE `biniyam-452918.movies.movie2` RENAME COLUMN duration_minutes TO duration;
+-- Drop the original duration column (optional)
+ALTER TABLE `biniyam-452918.movies.movie2`
+DROP COLUMN duration;
 
-ALTER TABLE `biniyam-452918.movies.movie2` DROP COLUMN duration;
-
--- standardized rounding
+-- Step 5: Standardize 'rating' column to 2 decimal places
 UPDATE `biniyam-452918.movies.movie2`
 SET rating = ROUND(rating, 2)
 WHERE rating IS NOT NULL;
 
--- removing duplicates:
+-- Step 6: Remove duplicates based on key attributes (keeping the record with highest number of ratings)
 WITH CTE AS (
-    SELECT *, ROW_NUMBER() OVER (PARTITION BY rank, year, duration, rating ORDER BY numberof_ratings DESC) AS rn
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY rank, year, duration_minutes, rating 
+                                 ORDER BY numberof_ratings DESC) AS rn
     FROM `biniyam-452918.movies.movie2`
 )
 DELETE FROM `biniyam-452918.movies.movie2`
 WHERE rn > 1;
 
-SELECT * FROM biniyam-452918.movies.movie2;
--- new column for cleaned value
-
-
-
-
-
+-- Step 7: Cleanup 'numberof_ratings' and convert to numeric (handling 'K' and 'M' abbreviations)
 ALTER TABLE `biniyam-452918.movies.movie2`
 ADD COLUMN number_of_ratings_clean INT64;
-
-
 
 UPDATE `biniyam-452918.movies.movie2`
 SET number_of_ratings_clean = 
     CASE 
         WHEN numberof_ratings LIKE '%K%' THEN 
-            CAST(REPLACE(REPLACE(REPLACE(REPLACE(numberof_ratings, 'K', ''), 'M', ''), '(', ''), ')', '') AS FLOAT64) * 1000
+            CAST(REPLACE(REPLACE(numberof_ratings, 'K', ''), 'M', '') AS FLOAT64) * 1000
         WHEN numberof_ratings LIKE '%M%' THEN 
-            CAST(REPLACE(REPLACE(REPLACE(REPLACE(numberof_ratings, 'K', ''), 'M', ''), '(', ''), ')', '') AS FLOAT64) * 1000000
+            CAST(REPLACE(REPLACE(numberof_ratings, 'K', ''), 'M', '') AS FLOAT64) * 1000000
         ELSE 
-            CAST(REPLACE(REPLACE(REPLACE(REPLACE(numberof_ratings, 'K', ''), 'M', ''), '(', ''), ')', '') AS INT64)
+            CAST(numberof_ratings AS INT64)
     END
 WHERE numberof_ratings IS NOT NULL;
 
+-- Drop old column and rename cleaned column
 ALTER TABLE `biniyam-452918.movies.movie2`
 DROP COLUMN numberof_ratings;
-
-
--- Rename name column to tile
-ALTER TABLE `biniyam-452918.movies.movie2`
-RENAME COLUMN name TO Title;
-
--- Rename number of ratings clean to number of ratings
 
 ALTER TABLE `biniyam-452918.movies.movie2`
 RENAME COLUMN number_of_ratings_clean TO Number_of_ratings;
 
--- Rename number of rank to Rank
+-- Step 8: Rename columns for clarity
+ALTER TABLE `biniyam-452918.movies.movie2`
+RENAME COLUMN name TO Title;
 
 ALTER TABLE `biniyam-452918.movies.movie2`
 RENAME COLUMN rank TO Movie_Rank;
 
-
--- Feature Engineering
+-- Step 9: Add 'decade' column for feature engineering
 ALTER TABLE `biniyam-452918.movies.movie2`
 ADD COLUMN decade STRING;
 
@@ -149,16 +121,12 @@ SET decade = CASE
     WHEN year BETWEEN 2010 AND 2019 THEN '2010s'
     WHEN year BETWEEN 2020 AND 2024 THEN '2020s'
     ELSE 'Out of Range'
-END
-where True;
+END;
 
-
--- Add a new column for Rating Buckets
+-- Step 10: Add rating categories for easier analysis
 ALTER TABLE `biniyam-452918.movies.movie2`
 ADD COLUMN rating_category STRING;
 
--- Update the column with rating buckets
--- Update the rating_category column with rating buckets
 UPDATE `biniyam-452918.movies.movie2`
 SET rating_category = 
     CASE
@@ -166,29 +134,19 @@ SET rating_category =
         WHEN rating >= 8 THEN '8.0 - 8.9 (Great)'
         WHEN rating >= 7 THEN '7.0 - 7.9 (Good)'
         ELSE 'Below 7 (Average)'
-    END
-WHERE TRUE;
+    END;
 
-
-
-
--- sorting movie rank
--- Update Movie_Rank to be sorted in ascending order
--- Update Movie_Rank to be sorted in ascending order
+-- Step 11: Reorder Movie_Rank to be sequentially correct after cleaning
 MERGE INTO `biniyam-452918.movies.movie2` AS m
 USING (
-  SELECT 
-    Movie_Rank, 
-    ROW_NUMBER() OVER (ORDER BY Movie_Rank ASC) AS new_rank
+  SELECT Movie_Rank, ROW_NUMBER() OVER (ORDER BY Movie_Rank ASC) AS new_rank
   FROM `biniyam-452918.movies.movie2`
 ) AS ranked_movies
 ON m.Movie_Rank = ranked_movies.Movie_Rank
 WHEN MATCHED THEN
   UPDATE SET m.Movie_Rank = ranked_movies.new_rank;
 
-
-
--- Create a new table with sorted Movie_Rank in ascending order
+-- Step 12: Rebuild table to enforce ordered Movie_Rank (optional but cleaner)
 CREATE OR REPLACE TABLE `biniyam-452918.movies.movie2` AS
 SELECT 
   ROW_NUMBER() OVER (ORDER BY Movie_Rank ASC) AS Movie_Rank,
@@ -203,7 +161,10 @@ SELECT
   decade
 FROM `biniyam-452918.movies.movie2`;
 
+-- Final check: Validate table structure
 SELECT column_name
 FROM `biniyam-452918.movies.INFORMATION_SCHEMA.COLUMNS`
 WHERE table_name = 'movie2';
 
+-- Optional final preview
+SELECT * FROM `biniyam-452918.movies.movie2`;
